@@ -148,6 +148,9 @@ public:
     bool ReadAudioData(std::vector<int16_t>& data, int sample_rate, int samples);
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
+    // Refresh last output time so the audio power timeout does not kick in while
+    // playing media that bypasses the regular playback queue (e.g. music).
+    void UpdateOutputTimestamp() { last_output_time_ = std::chrono::steady_clock::now(); }
 
 private:
     AudioCodec* codec_ = nullptr;

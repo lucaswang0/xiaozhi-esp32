@@ -3,6 +3,7 @@
 #include <esp_log.h>
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
+#include "audio_codec_if.h"
 
 #define TAG "BoxAudioCodec"
 
@@ -242,6 +243,88 @@ void BoxAudioCodec::EnableOutput(bool enable) {
         ESP_ERROR_CHECK(esp_codec_dev_close(output_dev_));
     }
     AudioCodec::EnableOutput(enable);
+}
+
+bool BoxAudioCodec::SetOutputSampleRate(int sample_rate) {
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
+
+    // -1 means reset to the original sample rate
+    if (sample_rate == -1) {
+        if (original_output_sample_rate_ > 0) {
+            sample_rate = original_output_sample_rate_;
+            ESP_LOGI(TAG, "Resetting to original output sample rate: %d Hz", sample_rate);
+        } else {
+            ESP_LOGW(TAG, "Original sample rate not available, cannot reset");
+            return false;
+        }
+    }
+
+    if (sample_rate <= 0 || sample_rate > 192000) {
+        ESP_LOGE(TAG, "Invalid sample rate: %d", sample_rate);
+        return false;
+    }
+
+    if (output_sample_rate_ == sample_rate) {
+        ESP_LOGI(TAG, "Sample rate already set to %d Hz", sample_rate);
+        return true;
+    }
+
+    if (tx_handle_ == nullptr) {
+        ESP_LOGW(TAG, "TX handle is null, only updating sample rate variable");
+        output_sample_rate_ = sample_rate;
+        return true;
+    }
+
+    ESP_LOGI(TAG, "Changing output sample rate from %d to %d Hz", output_sample_rate_, sample_rate);
+
+    // Reconfigure the I2S TX clock directly. This bypasses esp_codec_dev
+    // set_fmt, which rejects a new sample rate while the RX channel is open
+    // (esp_codec_dev_open returns ESP_CODEC_DEV_NOT_SUPPORT in that case).
+    esp_err_t disable_ret = i2s_channel_disable(tx_handle_);
+    if (disable_ret == ESP_OK) {
+        ESP_LOGI(TAG, "Disabled I2S TX channel for reconfiguration");
+    } else if (disable_ret != ESP_ERR_INVALID_STATE) {
+        ESP_LOGW(TAG, "Failed to disable I2S TX channel: %s", esp_err_to_name(disable_ret));
+    }
+
+    i2s_std_clk_config_t clk_cfg = {
+        .sample_rate_hz = (uint32_t)sample_rate,
+        .clk_src = I2S_CLK_SRC_DEFAULT,
+        .mclk_multiple = I2S_MCLK_MULTIPLE_256,
+#ifdef I2S_HW_VERSION_2
+        .ext_clk_freq_hz = 0,
+#endif
+    };
+
+    esp_err_t ret = i2s_channel_reconfig_std_clock(tx_handle_, &clk_cfg);
+    esp_err_t enable_ret = i2s_channel_enable(tx_handle_);
+    if (enable_ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to enable I2S TX channel: %s", esp_err_to_name(enable_ret));
+    }
+
+    if (ret != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to change sample rate to %d Hz: %s", sample_rate, esp_err_to_name(ret));
+        return false;
+    }
+
+    // Synchronize the ES8311 codec chip sample rate.
+    if (out_codec_if_ != nullptr && out_codec_if_->set_fs != nullptr) {
+        esp_codec_dev_sample_info_t fs = {
+            .bits_per_sample = 16,
+            .channel = 1,
+            .channel_mask = 0,
+            .sample_rate = (uint32_t)sample_rate,
+            .mclk_multiple = 0,
+        };
+        int codec_ret = out_codec_if_->set_fs(out_codec_if_, &fs);
+        if (codec_ret != ESP_OK) {
+            ESP_LOGW(TAG, "Failed to set ES8311 sample rate to %d: %d", sample_rate, codec_ret);
+        }
+    }
+
+    output_sample_rate_ = sample_rate;
+    ESP_LOGI(TAG, "Successfully changed output sample rate to %d Hz", sample_rate);
+    return true;
 }
 
 int BoxAudioCodec::Read(int16_t* dest, int samples) {

@@ -40,6 +40,7 @@ public:
     virtual void SetOutputVolume(int volume) override;
     virtual void EnableInput(bool enable) override;
     virtual void EnableOutput(bool enable) override;
+    virtual bool SetOutputSampleRate(int sample_rate) override;
 };
 
 #endif // _BOX_AUDIO_CODEC_H

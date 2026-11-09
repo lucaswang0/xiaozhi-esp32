@@ -1246,3 +1246,8 @@ menu "TAIJIPAI_S3_CONFIG"
 endmenu
 
 endmenu
+
+# 兼容 esp_video/esp_h264 生态的 $CONFIG{} 引用检查（IDF 6 组件管理器要求定义）
+config ESP_VIDEO_USE_CUSTOMIZED_ESP_H264_VERSION
+    bool "Enable customized esp_h264 version negotiation"
+    default n

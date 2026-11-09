@@ -1,6 +1,7 @@
 #include "board.h"
 #include "assets/lang_config.h"
 #include "display/display.h"
+#include "esp32_music.h"
 #include "settings.h"
 #include "system_info.h"
 
@@ -18,7 +19,15 @@ Board::Board() {
         uuid_ = GenerateUuid();
         settings.SetString("uuid", uuid_);
     }
+    music_ = new Esp32Music();
     ESP_LOGI(TAG, "UUID=%s SKU=%s", uuid_.c_str(), BOARD_NAME);
+}
+
+Board::~Board() {
+    if (music_ != nullptr) {
+        delete music_;
+        music_ = nullptr;
+    }
 }
 
 std::string Board::GenerateUuid() {

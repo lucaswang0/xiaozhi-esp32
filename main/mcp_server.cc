@@ -8,11 +8,13 @@
 #include <esp_log.h>
 #include <esp_pthread.h>
 #include <algorithm>
+#include <cctype>
 #include <cstring>
 #include <iterator>
 #include <optional>
 
 #include "application.h"
+#include "esp32_music.h"
 #include "board.h"
 #include "display.h"
 #include "lvgl_image.h"
@@ -113,6 +115,131 @@ void McpServer::AddCommonTools() {
                     }
                     return std::move(*result);
                 });
+    }
+
+    auto music = board.GetMusic();
+    if (music) {
+        AddTool("self.music.play_song",
+            "播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
+            "参数:\n"
+            "  `song_name`: 要播放的歌曲名称（必需）。\n"
+            "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
+            "返回:\n"
+            "  播放状态信息，不需确认，立刻播放歌曲。",
+            PropertyList({
+                Property("song_name", kPropertyTypeString),
+                Property("artist_name", kPropertyTypeString, "")
+            }),
+            [music](const PropertyList& properties) -> ReturnValue {
+                auto song_name = properties["song_name"].value<std::string>();
+                auto artist_name = properties["artist_name"].value<std::string>();
+
+                auto esp32_music = static_cast<Esp32Music*>(music);
+                if (!esp32_music->PlayPlaylist({{song_name, artist_name}})) {
+                    return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
+                }
+                return "{\"success\": true, \"message\": \"音乐开始播放\"}";
+            });
+
+        AddTool("self.music.play_playlist",
+            "播放歌单并自动连续播放。当用户要求连续播放多首歌曲、播放某个歌手的多首歌或播放歌单时使用。\n"
+            "参数:\n"
+            "  `playlist`: 歌单字符串。多首歌之间用英文分号';'或换行分隔；每首歌用 '歌名|歌手' 格式，歌手可省略。\n"
+            "  例如: \"晴天|周杰伦;七里香|周杰伦;稻香\"\n"
+            "返回:\n"
+            "  第一首歌曲的播放状态，其余歌曲会在当前歌曲播放完毕后自动依次播放，无需再次调用。",
+            PropertyList({
+                Property("playlist", kPropertyTypeString)
+            }),
+            [music](const PropertyList& properties) -> ReturnValue {
+                std::string playlist_str = properties["playlist"].value<std::string>();
+
+                // 统一分隔符：换行、中文分号都按英文分号处理
+                for (auto& ch : playlist_str) {
+                    if (ch == '\n' || ch == '\r') {
+                        ch = ';';
+                    }
+                }
+                size_t cjk_semi = 0;
+                while ((cjk_semi = playlist_str.find("；", cjk_semi)) != std::string::npos) {
+                    playlist_str.replace(cjk_semi, 3, ";");
+                    cjk_semi += 1;
+                }
+
+                auto trim = [](const std::string& s) -> std::string {
+                    size_t begin = s.find_first_not_of(" \t");
+                    if (begin == std::string::npos) {
+                        return "";
+                    }
+                    size_t end = s.find_last_not_of(" \t");
+                    return s.substr(begin, end - begin + 1);
+                };
+
+                std::vector<std::pair<std::string, std::string>> songs;
+                size_t start = 0;
+                while (start <= playlist_str.size()) {
+                    size_t sep = playlist_str.find(';', start);
+                    std::string segment = trim(playlist_str.substr(
+                        start, sep == std::string::npos ? std::string::npos : sep - start));
+
+                    if (!segment.empty()) {
+                        size_t bar = segment.find('|');
+                        if (bar == std::string::npos) {
+                            songs.emplace_back(segment, "");
+                        } else {
+                            songs.emplace_back(trim(segment.substr(0, bar)), trim(segment.substr(bar + 1)));
+                        }
+                    }
+
+                    if (sep == std::string::npos) {
+                        break;
+                    }
+                    start = sep + 1;
+                }
+
+                if (songs.empty()) {
+                    return "{\"success\": false, \"message\": \"歌单为空，请提供歌曲名称\"}";
+                }
+
+                auto esp32_music = static_cast<Esp32Music*>(music);
+                if (!esp32_music->PlayPlaylist(songs)) {
+                    return "{\"success\": false, \"message\": \"获取音乐资源失败，第一首歌曲可能不存在\"}";
+                }
+
+                ESP_LOGI(TAG, "Playlist started with %d song(s)", (int)songs.size());
+                return "{\"success\": true, \"message\": \"歌单开始播放，共" + std::to_string(songs.size()) +
+                       "首，第一首结束后将自动连播后续歌曲\"}";
+            });
+
+        AddTool("self.music.set_display_mode",
+            "设置音乐播放时的显示模式。可以选择显示频谱或歌词，比如用户说'打开频谱'或者'显示频谱'，'打开歌词'或者'显示歌词'就设置对应的显示模式。\n"
+            "参数:\n"
+            "  `mode`: 显示模式，可选值为 'spectrum'（频谱）或 'lyrics'（歌词）。\n"
+            "返回:\n"
+            "  设置结果信息。",
+            PropertyList({
+                Property("mode", kPropertyTypeString)
+            }),
+            [music](const PropertyList& properties) -> ReturnValue {
+                auto mode_str = properties["mode"].value<std::string>();
+
+                // 转换为小写以便比较
+                std::transform(mode_str.begin(), mode_str.end(), mode_str.begin(), ::tolower);
+
+                if (mode_str == "spectrum" || mode_str == "频谱") {
+                    // 设置为频谱显示模式
+                    auto esp32_music = static_cast<Esp32Music*>(music);
+                    esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_SPECTRUM);
+                    return "{\"success\": true, \"message\": \"已切换到频谱显示模式\"}";
+                } else if (mode_str == "lyrics" || mode_str == "歌词") {
+                    // 设置为歌词显示模式
+                    auto esp32_music = static_cast<Esp32Music*>(music);
+                    esp32_music->SetDisplayMode(Esp32Music::DISPLAY_MODE_LYRICS);
+                    return "{\"success\": true, \"message\": \"已切换到歌词显示模式\"}";
+                } else {
+                    return "{\"success\": false, \"message\": \"无效的显示模式，请使用 'spectrum' 或 'lyrics'\"}";
+                }
+            });
     }
 #endif
 

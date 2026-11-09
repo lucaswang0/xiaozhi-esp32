@@ -91,6 +91,12 @@ public:
         return false;
     }
 
+    // Music display hooks (empty by default; overridden by capable displays)
+    virtual void SetMusicInfo(const char* song_name) { (void)song_name; }
+    virtual void start() {}
+    virtual void clearScreen() {}
+    virtual void stopFft() {}
+
     inline int width() const { return width_; }
     inline int height() const { return height_; }
     inline bool IsSetupUICalled() const { return setup_ui_called_; }
