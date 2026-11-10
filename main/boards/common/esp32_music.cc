@@ -17,6 +17,7 @@
 #include <sstream>
 #include <algorithm>
 #include <cctype> // 为isdigit函数
+#include <cstdlib> // 为strtol/strtof函数
 #include <thread> // 为线程ID比较
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -398,7 +399,14 @@ bool Esp32Music::Download(const std::string &song_name, const std::string &artis
     }
 
     // 检查响应状态码
-    int status_code = http->GetStatusCode();
+    auto status_result = http->GetStatusCode();
+    if (!status_result)
+    {
+        ESP_LOGE(TAG, "Failed to get status code: %s", status_result.error().Message());
+        http->Close();
+        return false;
+    }
+    int status_code = *status_result;
     if (status_code != 200)
     {
         ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
@@ -694,7 +702,15 @@ void Esp32Music::DownloadAudioStream(const std::string &music_url)
         return;
     }
 
-    int status_code = http->GetStatusCode();
+    auto status_result = http->GetStatusCode();
+    if (!status_result)
+    {
+        ESP_LOGE(TAG, "Failed to get stream status code: %s", status_result.error().Message());
+        http->Close();
+        is_downloading_ = false;
+        return;
+    }
+    int status_code = *status_result;
     if (status_code != 200 && status_code != 206)
     { // 206 for partial content
         ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
@@ -712,12 +728,13 @@ void Esp32Music::DownloadAudioStream(const std::string &music_url)
 
     while (is_downloading_ && is_playing_)
     {
-        int bytes_read = http->Read(buffer, chunk_size);
-        if (bytes_read < 0)
+        auto read_result = http->Read(buffer, chunk_size);
+        if (!read_result)
         {
-            ESP_LOGE(TAG, "Failed to read audio data: error code %d", bytes_read);
+            ESP_LOGE(TAG, "Failed to read audio data: %s", read_result.error().Message());
             break;
         }
+        int bytes_read = *read_result;
         if (bytes_read == 0)
         {
             ESP_LOGI(TAG, "Audio stream download completed, total: %d bytes", total_downloaded);
@@ -1335,7 +1352,15 @@ bool Esp32Music::DownloadLyrics(const std::string &lyric_url)
         }
 
         // 检查HTTP状态码
-        int status_code = http->GetStatusCode();
+        auto status_result = http->GetStatusCode();
+        if (!status_result)
+        {
+            ESP_LOGE(TAG, "Failed to get lyric status code: %s", status_result.error().Message());
+            http->Close();
+            retry_count++;
+            continue;
+        }
+        int status_code = *status_result;
         ESP_LOGI(TAG, "Lyric download HTTP status code: %d", status_code);
 
         // 处理重定向 - 由于Http类没有GetHeader方法，我们只能根据状态码判断
@@ -1369,7 +1394,14 @@ bool Esp32Music::DownloadLyrics(const std::string &lyric_url)
 
         while (true)
         {
-            bytes_read = http->Read(buffer, sizeof(buffer) - 1);
+            auto read_result = http->Read(buffer, sizeof(buffer) - 1);
+            if (!read_result)
+            {
+                ESP_LOGE(TAG, "Failed to read lyric data: %s", read_result.error().Message());
+                read_error = true;
+                break;
+            }
+            bytes_read = *read_result;
             // ESP_LOGD(TAG, "Lyric HTTP read returned %d bytes", bytes_read); // 注释掉以减少日志输出
 
             if (bytes_read > 0)
@@ -1512,11 +1544,10 @@ bool Esp32Music::ParseLyrics(const std::string &lyric_content)
                         continue;
                     }
 
-                    // 是时间格式，解析时间戳
-                    try
+                    // 是时间格式，解析时间戳（工程关闭异常，改用 strtol/strtof）
                     {
-                        int minutes = std::stoi(tag_or_time.substr(0, colon_pos));
-                        float seconds = std::stof(tag_or_time.substr(colon_pos + 1));
+                        int minutes = static_cast<int>(std::strtol(tag_or_time.substr(0, colon_pos).c_str(), nullptr, 10));
+                        float seconds = std::strtof(tag_or_time.substr(colon_pos + 1).c_str(), nullptr);
                         int timestamp_ms = minutes * 60 * 1000 + (int)(seconds * 1000);
 
                         // 安全处理歌词文本，确保UTF-8编码正确
@@ -1542,10 +1573,6 @@ bool Esp32Music::ParseLyrics(const std::string &lyric_content)
                         {
                             ESP_LOGD(TAG, "Parsed lyric: [%d ms] (empty)", timestamp_ms);
                         }
-                    }
-                    catch (const std::exception &e)
-                    {
-                        ESP_LOGW(TAG, "Failed to parse time: %s", tag_or_time.c_str());
                     }
                 }
             }
