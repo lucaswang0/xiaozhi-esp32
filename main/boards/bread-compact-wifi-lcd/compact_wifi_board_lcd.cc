@@ -8,6 +8,7 @@
 #include "mcp_server.h"
 #include "lamp_controller.h"
 #include "led/single_led.h"
+#include "adc_battery_estimation.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -15,6 +16,12 @@
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_ops.h>
 #include <driver/spi_common.h>
+#include <esp_adc/adc_oneshot.h>
+#include <esp_adc/adc_cali.h>
+#include <esp_adc/adc_cali_scheme.h>
+
+#include <cstdio>
+#include <cstring>
 
 #if defined(LCD_TYPE_ILI9341_SERIAL)
 #include "esp_lcd_ili9341.h"
@@ -58,6 +65,110 @@ static const gc9a01_lcd_init_cmd_t gc9107_lcd_init_cmds[] = {
 #endif
  
 #define TAG "CompactWifiBoardLCD"
+
+static adc_oneshot_unit_handle_t battery_adc_handle = nullptr;
+static adc_cali_handle_t battery_adc_cali_handle = nullptr;
+static adc_battery_estimation_handle_t battery_estimation_handle = nullptr;
+
+// 初始化电池检测 ADC：电量估算库与电压读取共用同一组 ADC 句柄，避免重复占用 ADC1
+static void InitializeBatteryMonitor() {
+    adc_oneshot_unit_init_cfg_t unit_cfg = {};
+    unit_cfg.unit_id = BATTERY_ADC_UNIT;
+    ESP_ERROR_CHECK(adc_oneshot_new_unit(&unit_cfg, &battery_adc_handle));
+
+    adc_oneshot_chan_cfg_t chan_cfg = {};
+    chan_cfg.atten = ADC_ATTEN_DB_12;
+    chan_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    ESP_ERROR_CHECK(adc_oneshot_config_channel(battery_adc_handle, BATTERY_ADC_CHANNEL, &chan_cfg));
+
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id = BATTERY_ADC_UNIT;
+    cali_cfg.chan = BATTERY_ADC_CHANNEL;
+    cali_cfg.atten = ADC_ATTEN_DB_12;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    ESP_ERROR_CHECK(adc_cali_create_scheme_curve_fitting(&cali_cfg, &battery_adc_cali_handle));
+#else
+    adc_cali_line_fitting_config_t cali_cfg = {};
+    cali_cfg.unit_id = BATTERY_ADC_UNIT;
+    cali_cfg.atten = ADC_ATTEN_DB_12;
+    cali_cfg.bitwidth = ADC_BITWIDTH_DEFAULT;
+    ESP_ERROR_CHECK(adc_cali_create_scheme_line_fitting(&cali_cfg, &battery_adc_cali_handle));
+#endif
+
+    adc_battery_estimation_t estimation_cfg = {};
+    estimation_cfg.external.adc_handle = battery_adc_handle;
+    estimation_cfg.external.adc_cali_handle = battery_adc_cali_handle;
+    estimation_cfg.adc_channel = BATTERY_ADC_CHANNEL;
+    estimation_cfg.upper_resistor = BATTERY_UPPER_RESISTOR;
+    estimation_cfg.lower_resistor = BATTERY_LOWER_RESISTOR;
+    battery_estimation_handle = adc_battery_estimation_create(&estimation_cfg);
+}
+
+// 读取分压点电压并还原为电池电压（单位：V），多次采样取平均以降低抖动
+static float ReadBatteryVoltage() {
+    if (battery_adc_handle == nullptr || battery_adc_cali_handle == nullptr) {
+        return 0.0f;
+    }
+    int mv_sum = 0;
+    int valid_samples = 0;
+    for (int i = 0; i < 8; ++i) {
+        int raw = 0;
+        int mv = 0;
+        if (adc_oneshot_read(battery_adc_handle, BATTERY_ADC_CHANNEL, &raw) == ESP_OK &&
+            adc_cali_raw_to_voltage(battery_adc_cali_handle, raw, &mv) == ESP_OK) {
+            mv_sum += mv;
+            ++valid_samples;
+        }
+    }
+    if (valid_samples == 0) {
+        return 0.0f;
+    }
+    float pin_mv = static_cast<float>(mv_sum) / valid_samples;
+    return pin_mv * (BATTERY_UPPER_RESISTOR + BATTERY_LOWER_RESISTOR) /
+           BATTERY_LOWER_RESISTOR / 1000.0f;
+}
+
+// 在状态栏电池图标旁显示实时电压
+class CompactWifiDisplay : public SpiLcdDisplay {
+public:
+    CompactWifiDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width,
+                       int height, int offset_x, int offset_y, bool mirror_x, bool mirror_y,
+                       bool swap_xy)
+        : SpiLcdDisplay(panel_io, panel, width, height, offset_x, offset_y, mirror_x, mirror_y,
+                        swap_xy) {}
+
+    void SetupUI() override {
+        SpiLcdDisplay::SetupUI();
+        DisplayLockGuard lock(this);
+        if (top_bar_ == nullptr) {
+            return;
+        }
+        lv_obj_t* right_icons = lv_obj_get_child(top_bar_, 1);
+        if (right_icons == nullptr) {
+            return;
+        }
+        voltage_label_ = lv_label_create(right_icons);
+        lv_label_set_text(voltage_label_, "--V");
+        lv_obj_set_style_margin_left(voltage_label_, 4, 0);
+    }
+
+    void UpdateStatusBar(bool update_all = false) override {
+        SpiLcdDisplay::UpdateStatusBar(update_all);
+        if (voltage_label_ == nullptr) {
+            return;
+        }
+        char text[16];
+        snprintf(text, sizeof(text), "%.2fV", ReadBatteryVoltage());
+        DisplayLockGuard lock(this);
+        if (strcmp(lv_label_get_text(voltage_label_), text) != 0) {
+            lv_label_set_text(voltage_label_, text);
+        }
+    }
+
+private:
+    lv_obj_t* voltage_label_ = nullptr;
+};
 
 class CompactWifiBoardLCD : public WifiBoard {
 private:
@@ -118,7 +229,7 @@ private:
 #ifdef  LCD_TYPE_GC9A01_SERIAL
         panel_config.vendor_config = &gc9107_vendor_config;
 #endif
-        display_ = new SpiLcdDisplay(panel_io, panel,
+        display_ = new CompactWifiDisplay(panel_io, panel,
                                     DISPLAY_WIDTH, DISPLAY_HEIGHT, DISPLAY_OFFSET_X, DISPLAY_OFFSET_Y, DISPLAY_MIRROR_X, DISPLAY_MIRROR_Y, DISPLAY_SWAP_XY);
     }
 
@@ -141,6 +252,7 @@ private:
 public:
     CompactWifiBoardLCD() :
         boot_button_(BOOT_BUTTON_GPIO) {
+        InitializeBatteryMonitor();
         InitializeSpi();
         InitializeLcdDisplay();
         InitializeButtons();
@@ -165,6 +277,17 @@ public:
             AUDIO_I2S_GPIO_BCLK, AUDIO_I2S_GPIO_WS, AUDIO_I2S_GPIO_DOUT, AUDIO_I2S_GPIO_DIN);
 #endif
         return &audio_codec;
+    }
+
+    virtual bool GetBatteryLevel(int& level, bool& charging, bool& discharging) override {
+        float capacity = 100.0f;
+        if (battery_estimation_handle != nullptr) {
+            adc_battery_estimation_get_capacity(battery_estimation_handle, &capacity);
+        }
+        level = static_cast<int>(capacity);
+        charging = false;
+        discharging = true;
+        return true;
     }
 
     virtual Display* GetDisplay() override {
