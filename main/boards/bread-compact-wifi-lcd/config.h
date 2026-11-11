@@ -287,11 +287,11 @@
 // A MCP Test: Control a lamp
 #define LAMP_GPIO GPIO_NUM_18
 
-// 电池电压检测：电池正极 -- 10k -- GPIO9 -- 4.7k -- GND
+// 电池电压检测：电池正极 -- 4.7k -- GPIO9 -- 10k -- GND
 // GPIO9 对应 ESP32-S3 的 ADC1 通道 8，WiFi 工作时 ADC2 不可用
 #define BATTERY_ADC_UNIT       ADC_UNIT_1
 #define BATTERY_ADC_CHANNEL    ADC_CHANNEL_8  // GPIO9
-#define BATTERY_UPPER_RESISTOR 10000.0f
-#define BATTERY_LOWER_RESISTOR 4700.0f
+#define BATTERY_UPPER_RESISTOR 4700.0f
+#define BATTERY_LOWER_RESISTOR 10000.0f
 
 #endif // _BOARD_CONFIG_H_
