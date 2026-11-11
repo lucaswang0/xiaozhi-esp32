@@ -33,8 +33,8 @@
 | --- | --- | --- |
 | GPIO0 | `BOOT_BUTTON_GPIO` | BOOT 按键：启动中进入配网，运行中切换对话 |
 | GPIO48 | `BUILTIN_LED_GPIO` | 板载单色 LED 状态指示 |
-| GPIO39 | `VOLUME_UP_BUTTON_GPIO` | 音量加（已定义，当前板级代码未初始化） |
-| GPIO37 | `VOLUME_DOWN_BUTTON_GPIO` | 音量减（已定义，当前板级代码未初始化） |
+| GPIO39 | `VOLUME_UP_BUTTON_GPIO` | 音量加（单击 +10） |
+| GPIO38 | `VOLUME_DOWN_BUTTON_GPIO` | 音量减（单击 -10） |
 | — | `TOUCH_BUTTON_GPIO` | 未使用（`GPIO_NUM_NC`） |
 
 ## 电池电压检测（ADC）

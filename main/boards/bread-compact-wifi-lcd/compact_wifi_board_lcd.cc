@@ -9,6 +9,7 @@
 #include "lamp_controller.h"
 #include "led/single_led.h"
 #include "adc_battery_estimation.h"
+#include "assets/lang_config.h"
 
 #include <esp_log.h>
 #include <driver/i2c_master.h>
@@ -140,14 +141,14 @@ public:
 
     void SetupUI() override {
         SpiLcdDisplay::SetupUI();
-        // 禁用低电量弹窗：这块板子只有 ADC 电压检测，没有完整的充电管理，
-        // 电量估不准时弹窗会误导；用户只看状态栏电压即可。
+        DisplayLockGuard lock(this);
+        // 这块板子只有 ADC 电压检测，没有充电管理，电量估算不准，
+        // 删掉低电量弹窗，避免屏幕上常驻 "Low battery, please charge"。
         if (low_battery_popup_ != nullptr) {
             lv_obj_del(low_battery_popup_);
             low_battery_popup_ = nullptr;
             low_battery_label_ = nullptr;
         }
-        DisplayLockGuard lock(this);
         if (top_bar_ == nullptr) {
             return;
         }
@@ -181,6 +182,8 @@ class CompactWifiBoardLCD : public WifiBoard {
 private:
  
     Button boot_button_;
+    Button volume_up_button_;
+    Button volume_down_button_;
     LcdDisplay* display_;
 
     void InitializeSpi() {
@@ -249,6 +252,26 @@ private:
             }
             app.ToggleChatState();
         });
+
+        volume_up_button_.OnClick([this]() {
+            auto codec = GetAudioCodec();
+            auto volume = codec->output_volume() + 10;
+            if (volume > 100) {
+                volume = 100;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
+
+        volume_down_button_.OnClick([this]() {
+            auto codec = GetAudioCodec();
+            auto volume = codec->output_volume() - 10;
+            if (volume < 0) {
+                volume = 0;
+            }
+            codec->SetOutputVolume(volume);
+            GetDisplay()->ShowNotification(Lang::Strings::VOLUME + std::to_string(volume));
+        });
     }
 
     // 物联网初始化，添加对 AI 可见设备
@@ -258,7 +281,9 @@ private:
 
 public:
     CompactWifiBoardLCD() :
-        boot_button_(BOOT_BUTTON_GPIO) {
+        boot_button_(BOOT_BUTTON_GPIO),
+        volume_up_button_(VOLUME_UP_BUTTON_GPIO),
+        volume_down_button_(VOLUME_DOWN_BUTTON_GPIO) {
         InitializeBatteryMonitor();
         InitializeSpi();
         InitializeLcdDisplay();

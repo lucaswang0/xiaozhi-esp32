@@ -1447,7 +1447,9 @@ void LcdDisplay::SetTheme(Theme* theme) {
 #endif
 
     // Update low battery popup
-    lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
+    if (low_battery_popup_ != nullptr) {
+        lv_obj_set_style_bg_color(low_battery_popup_, lvgl_theme->low_battery_color(), 0);
+    }
 
     // No errors occurred. Save theme to settings
     Display::SetTheme(lvgl_theme);

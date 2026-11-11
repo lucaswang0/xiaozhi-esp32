@@ -35,7 +35,7 @@ config CUSTOM_ASSETS_FILE
 
 choice
     prompt "Default Language"
-    default LANGUAGE_EN_US
+    default LANGUAGE_ZH_CN
     help
         Select device display language
 
@@ -64,7 +64,7 @@ choice
     config LANGUAGE_RU_RU
         bool "Russian"
     config LANGUAGE_AR_SA
-        bool "Arabic"
+        bool "Arabic" 
     config LANGUAGE_HI_IN
         bool "Hindi"
     config LANGUAGE_MR_IN
@@ -946,7 +946,7 @@ endchoice
 
 choice DISPLAY_STYLE
     prompt "Select display style"
-    default USE_DEFAULT_MESSAGE_STYLE
+    default USE_WECHAT_MESSAGE_STYLE
     help
         Select display style for Xiaozhi device
 
@@ -975,8 +975,8 @@ config JC4827W543_EXTERNAL_AMP
 
 config USE_MULTILINE_CHAT_MESSAGE
     bool "Use multiline chat message display (default mode only)"
-    depends on USE_DEFAULT_MESSAGE_STYLE
-    default n
+    depends on USE_WECHAT_MESSAGE_STYLE
+    default y
     help
         When enabled, the chat message area in the default display mode shows
         multiple wrapped lines that grow upward from the bottom of the screen,

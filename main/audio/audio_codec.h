@@ -64,7 +64,7 @@ protected:
     int original_output_sample_rate_ = 0;
     int input_channels_ = 1;
     int output_channels_ = 1;
-    int output_volume_ = 70;
+    int output_volume_ = 30;
     float input_gain_ = 0.0;
 
     virtual int Read(int16_t* dest, int samples) = 0;
