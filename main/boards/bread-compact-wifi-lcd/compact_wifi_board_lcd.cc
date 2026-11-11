@@ -140,6 +140,13 @@ public:
 
     void SetupUI() override {
         SpiLcdDisplay::SetupUI();
+        // 禁用低电量弹窗：这块板子只有 ADC 电压检测，没有完整的充电管理，
+        // 电量估不准时弹窗会误导；用户只看状态栏电压即可。
+        if (low_battery_popup_ != nullptr) {
+            lv_obj_del(low_battery_popup_);
+            low_battery_popup_ = nullptr;
+            low_battery_label_ = nullptr;
+        }
         DisplayLockGuard lock(this);
         if (top_bar_ == nullptr) {
             return;
